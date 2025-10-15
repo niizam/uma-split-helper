@@ -12,4 +12,4 @@ Split Tunneling for Umamusume using OVPN<br>
 2. Pick one of the server available
 3. Click the `Save Patched OVPN`, then save the file
 4. Click the `Patch hosts file`
-5. Open the saved `.ovpn` file in step 2
+5. Open the saved `.ovpn` file in step 3
