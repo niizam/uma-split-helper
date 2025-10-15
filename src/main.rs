@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -6,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+use std::collections::HashSet;
 
 use anyhow::{Context, Result, anyhow};
 use eframe::{App, egui};
@@ -583,34 +586,87 @@ fn patch_hosts_file(entries: &[ResolvedEntry]) -> Result<usize> {
     let hosts_path = hosts_file_path();
     let existing = fs::read_to_string(&hosts_path).unwrap_or_default();
 
-    let mut to_append = Vec::new();
-    for entry in entries {
-        if !hosts_contains_entry(&existing, entry) {
-            to_append.push(format!("{:<15}\t{}", entry.ip, entry.domain));
+    let mut modified_content = String::new();
+    let mut updated_domains = std::collections::HashSet::new();
+    let mut changed_count = 0;
+
+    // First pass: update existing entries or keep them as-is
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        
+        // Keep comments and empty lines as-is
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            modified_content.push_str(line);
+            modified_content.push('\n');
+            continue;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        if let Some(ip_part) = parts.next() {
+            let domains_in_line: Vec<&str> = parts.collect();
+            
+            // Check if any of our target domains are in this line
+            let mut found_target = false;
+            for entry in entries {
+                if domains_in_line.iter().any(|d| d.eq_ignore_ascii_case(&entry.domain)) {
+                    found_target = true;
+                    updated_domains.insert(entry.domain.clone());
+                    
+                    // If IP differs, update it; otherwise keep as-is
+                    if ip_part != entry.ip {
+                        modified_content.push_str(&format!("{:<15}\t{}\n", entry.ip, entry.domain));
+                        changed_count += 1;
+                    } else {
+                        modified_content.push_str(line);
+                        modified_content.push('\n');
+                    }
+                    break;
+                }
+            }
+            
+            // Keep non-target lines as-is
+            if !found_target {
+                modified_content.push_str(line);
+                modified_content.push('\n');
+            }
+        } else {
+            modified_content.push_str(line);
+            modified_content.push('\n');
         }
     }
 
-    if to_append.is_empty() {
-        return Ok(0);
+    // Second pass: append new entries that weren't in the file
+    let mut to_append = Vec::new();
+    for entry in entries {
+        if !updated_domains.contains(&entry.domain) {
+            to_append.push(format!("{:<15}\t{}", entry.ip, entry.domain));
+            changed_count += 1;
+        }
     }
 
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&hosts_path)
-        .with_context(|| {
-            format!(
-                "Unable to open hosts file at {}. Try running the app as Administrator.",
-                hosts_path.display()
-            )
-        })?;
-
-    writeln!(file, "\n# UMA VPN pinned entries")
-        .context("Failed to write comment to hosts file")?;
-    for line in &to_append {
-        writeln!(file, "{}", line).context("Failed to append entry to hosts file")?;
+    if !to_append.is_empty() {
+        if !modified_content.ends_with('\n') {
+            modified_content.push('\n');
+        }
+        modified_content.push_str("\n# UMA VPN pinned entries\n");
+        for line in &to_append {
+            modified_content.push_str(line);
+            modified_content.push('\n');
+        }
     }
 
-    Ok(to_append.len())
+    // Write the modified content back if there were changes
+    if changed_count > 0 {
+        fs::write(&hosts_path, modified_content.as_bytes())
+            .with_context(|| {
+                format!(
+                    "Unable to write to hosts file at {}. Try running the app as Administrator.",
+                    hosts_path.display()
+                )
+            })?;
+    }
+
+    Ok(changed_count)
 }
 
 fn hosts_contains_entry(existing: &str, entry: &ResolvedEntry) -> bool {
