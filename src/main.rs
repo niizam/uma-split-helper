@@ -26,6 +26,7 @@ const API_URL: &str =
 
 const DOMAINS: &[&str] = &[
     "api-umamusume.cygames.jp",
+    "api.games.umamusume.jp",
     "prd-storage-app-umamusume.akamaized.net",
     "prd-storage-game-umamusume.akamaized.net",
     "prd-info-umamusume.akamaized.net",
